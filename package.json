@@ -1,0 +1,22 @@
+{
+  "name": "covid19_board",
+  "version": "1.0.0",
+  "description": "MUST HAVE 코로나 보드로 배우는 실전 웹 서비스 개발 클론 코딩",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dltmddus1998/COVID19_BOARD.git"
+  },
+  "author": "seungyeonLee",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dltmddus1998/COVID19_BOARD/issues"
+  },
+  "homepage": "https://github.com/dltmddus1998/COVID19_BOARD#readme",
+  "dependencies": {
+    "lodash": "^4.17.20"
+  }
+}
