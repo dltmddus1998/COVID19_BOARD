@@ -20,5 +20,5 @@ module.exports = {
     sequelize,
     // 데이터베이스 연결이 완료된 객체 모델 생성
     GlobalStat: require('./global-stat.model.js')(sequelize),
-    // 또 다른 객체 모델이 필요하면 똑같은 방식으로 아래 줄에 추가
-}
+    KeyValue: require('./key-value.model.js')(sequelize),
+};

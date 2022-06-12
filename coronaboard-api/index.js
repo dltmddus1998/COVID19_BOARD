@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const { sequelize } = require('./database');
 const globalStatController = require('./controller/global-stat.controller.js');
+const keyValueController = require('./controller/key-value.controller.js');
 
 async function launchServer() {
     const app = express(); // 익스프레스 인스턴스 생성
@@ -24,6 +25,10 @@ async function launchServer() {
     app.get('/global-stats', globalStatController.getAll);
     app.post('/global-stats', globalStatController.insertOrUpdate);
     app.delete('/global-stats', globalStatController.remove);
+
+    app.get('/key-value/:key', keyValueController.get);
+    app.post('/key-value', keyValueController.insertOrUpdate);
+    app.delete('/key-value/:key', keyValueController.remove);
 
     const port = process.env.PORT || 8080; // 포트 기본값을 8080으로 지정
     app.listen(port, () => {
