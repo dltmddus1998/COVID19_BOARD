@@ -888,6 +888,4 @@ async function main() {
 main();
 ```
 
-![node main.js 실행 후](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/724ab902-aaad-4890-8f24-b343a312e2f9/Untitled.png)
-
-node main.js 실행 후
+![image](https://user-images.githubusercontent.com/73332608/173293484-efc48e03-0648-4d42-ab0c-118a41cae173.png)
