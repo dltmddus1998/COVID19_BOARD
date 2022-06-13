@@ -444,3 +444,450 @@ module.exports = wrapWithErrorHandler({
 ✔︎ **이와 같이 에러핸들링을 해놓으면, 잘못된 데이터가 post될 경우 다음과 같이 500 상태코드와 에러메시지를 바로 볼 수 있다.**
 
 ![image](https://user-images.githubusercontent.com/73332608/172057840-63c5fa49-631c-4163-b3d8-ec826b8f6d0b.png)
+
+<br>
+<br>
+
+### 🙄 다양한 값을 저장하는 범용 API 만들기
+
+> 잡다한 데이터를 저장하고 쓰는 새로운 API를 추가해보자.
+> 
+
+웹 서비스를 만들다 보면 단순 설정값 또는 간단한 데이터 등 데이터 양이 많지 않아서 데이터베이스에 별도 테이블까지 만들어서 저장할 정도는 아닌 애매한 데이터를 다루는 경우가 종종 있다. 이러한 데이터를 테이블 하나에 키값 쌍을 한 행으로 저장해서 어떤 데이터든 유연하게 저장하고 불러올 수 있는 key-value API를 만들 것이다. 성별/나이대별 확진자 통계의 경우 날짜별 데이터가 필요 없고 오늘 날짜 데이터 하나만 필요하므로 (데이터양이 매우 적음) 이 API를 사용해 저장할 예정이다.
+
+방식은 위에서 global-stat API를 만든 방식과 동일하니 설명은 생략한다.
+
+```jsx
+// coronaboard-api/database/key-value.model.js
+const { DataTypes } = require('sequelize');
+
+module.exports = sequelize => {
+    return sequelize.define(
+        'KeyValue',
+        {
+            id: {
+                autoIncrement: true,
+                type: DataTypes.INTEGER.UNSIGNED,
+                allowNull: false,
+                primaryKey: true,
+            },
+            key: {
+                type: DataTypes.STRING,
+                allowNull: false,
+            },
+            value: {
+                type: DataTypes.TEXT,
+                allowNull: false,
+            },
+        },
+        {
+            sequelize,
+            tableName: 'KeyValue',
+            timestamps: false,
+            indexes: [
+                {
+                    name: 'PRIMARY',
+                    unique: true,
+                    fields: [{ name: 'id' }],
+                },
+                {
+                    name: 'key',
+                    unique: true,
+                    fields: [{ name: 'key' }],
+                },
+            ],
+        },
+    );
+};
+```
+
+```jsx
+// coronaboard-api/controller/key-value.controller.js
+const { KeyValue } = require('../database');
+const { wrapWithErrorHandler } = require('../util.js');
+
+async function get(req, res) {
+    const { key } = req.params;
+    if (!key) {
+        res.status(400).json({ error: 'key is required' });
+        return;
+    }
+
+    const result = await KeyValue.findOne({
+        where: { key },
+    });
+    res.status(200).json({ result });
+}
+
+async function insertOrUpdate(req, res) {
+    const { key, value } = req.body;
+    if (!key || !value) {
+        res.status(400).json({ error: 'key and value are required' });
+        return;
+    }
+
+    await KeyValue.upsert({ key, value });
+
+    res.status(200).json({ result: 'success' });
+}
+
+async function remove(req, res) {
+    const { key } = req.params;
+    if (!key) {
+        res.status(400).json({ error: 'key is required' });
+        return;
+    }
+
+    await KeyValue.destroy({
+        where: { key },
+    });
+
+    res.status(200).json({ result: 'success' });
+}
+
+module.exports = wrapWithErrorHandler({
+    get,
+    insertOrUpdate,
+    remove,
+});
+```
+
+```jsx
+// coronaboard-api/database/index.js
+.
+.
+.
+// 3. 외부 모듈에서 사용할 수 있도록 내보내기
+module.exports = {
+    sequelize,
+    // 데이터베이스 연결이 완료된 객체 모델 생성
+    GlobalStat: require('./global-stat.model.js')(sequelize),
+    KeyValue: require('./key-value.model.js')(sequelize),
+};
+```
+
+```jsx
+// coronaboard-api/index.js
+.
+.
+.
+app.get('/key-value/:key', keyValueController.get);
+app.post('/key-value', keyValueController.insertOrUpdate);
+app.delete('/key-value/:key', keyValueController.remove);
+```
+
+<br>
+<br>
+
+# 2. 저장소 구축하기: 구글 시트
+
+---
+
+<aside>
+💡 **구글 시트 서비스를 이용하여 스프레드시트에 콘텐츠를 입력, 가공, 활용해보자.**
+
+</aside>
+
+## 1) Start
+
+### 🔗 순서
+
+1. **코로나보드와 구글 시트**
+2. **구글 시트 API 사용 설정**
+    1. GCP(Google Could Platform) 콘솔에서 신규 프로젝트 생성하기
+    2. 구글 시트 API 활성화하기
+    3. OAuth 동의 화면 설정하기 
+    4. OAuth 클라이언트 ID 생성 및 설정 파일 내려받기
+    5. 구글 시트 API 클라이언트 생성하기
+3. **구글 시트 API로 데이터 읽기**
+    1. 자료 형태 미리보기
+    2. 데이터 읽어 객체로 변환하기 
+    3. 실제 데이터에 적용해보기 
+
+> **구글 시트는 구글에서 제공하는 무료 온라인 스프레드시트 애플리케이션이다. 
+엑셀 파일을 가져오거나 엑셀 파일로 내보낼 수도 있다.**
+> 
+
+### 구글 시트의 장.단점
+
+♥️ **장점**
+
+- 온라인 스프레드시트이므로 인터넷에세만 연결되어 있으면 어디서든 이용 가능
+- 다른 사람과 공유하여 하나의 시트를 동시에 편집 가능
+- 변경 추적 기능을 이용하면 누가 언제 어느 내용을 변경했는지 쉽게 찾아낼 수 있어서 공동 작업에 유리
+- 내용을 읽고 수정하는 API를 제공하여 일종의 데이터베이스처럼 활용할 수 있음
+
+**🚨 단점** 
+
+- 저장 가능한 데이터양이 시트당 최대 500만 개의 셀로 제한됨
+- API를 통해 구글 시트의 데이터를 읽거나 수정하는 작업은 100초 동안 최대 100번만 호출 가능
+- API를 통해 시트 데이터 전체를 읽어들이는 코드는 작성하기 쉽지만 원하는 셀을 찾아 데이터를 업데이트하는 코드는 작성하기 어려운 편
+- API 응답 속도가 조금 느린 편
+
+### 📉 코로나보드와 구글 시트
+
+코로나19 상황에 따라, 어떤 통계 데이터가 제공될지, 어떤 기능이 필요할지 예측 불가능했음
+
+→ 새로운 형태의 정보가 공개될 때마다 그 정보를 보여주는 기능을 최대한 빠르게 개발하는 것이 중요했음 & 콘텐츠를 손쉽게 입력하는 도구 필요
+
+SO, 구축 시간이 더 걸리는 RDBMS를 이용하면 비효율적이라 판단 → 데이터베이스 대신 구글 시트를 주요 데이터 저장소로 선택
+
+```jsx
+// coronaboard-api/tools/sheet_api_client_factory.js
+const fs = require('fs');
+const readline = require('readline');
+const { google } = require('googleapis');
+
+const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
+const TOKEN_PATH = 'accessToekn.json';
+
+class SheetApiClientFactory {
+    static async create() {
+        // 1. 구글 OAuth 클라이언트 사용을 위해 credentionals.json파일 읽기
+        const credential = fs.readFileSync('credentials.json');
+        // 2. 해당 파일을 이용해서 OAuth 인증 절차 진행
+        const auth = await this._authorize(JSON.parse(credential));
+        // 3. 생성된 OAuth 클라이언트를 이용하여 구글 시트 API 클라이언트 생성
+        return google.sheets({ version: 'v4', auth });
+    }
+
+    static async _authorize(credentials) {
+        const { client_secret, client_id, redirect_uris } = credentials.installed;
+        // 4. 구글 OAuth 클라이언트 초기화 
+        const oAuth2Client = new google.auth.OAuth2(
+            client_id,
+            client_secret,
+            redirect_uris[0],
+        );
+
+        // 5. 기존에 발급받아둔 엑세스 토큰이 없다면 새롭게 발급 요청
+        if (!fs.existsSync(TOKEN_PATH)) {
+            const token = await this._getNewToken(oAuth2Client);
+            oAuth2Client.setCredentials(token);
+
+            fs.writeFileSync(TOKEN_PATH, JSON.stringify(token));
+            console.log('Token stored to', TOKEN_PATH);
+
+            return oAuth2Client;
+        }
+
+        // 6. 기존에 발급받아둔 엑세스 토큰이 있으면 바로 사용
+        const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
+        oAuth2Client.setCredentials(token);
+
+        return oAuth2Client;
+    }
+
+    static async _getNewToken(oAuth2Client) {
+        // 7. OAuth 인증 진행을 위한 URL 생성
+        const authUrl = oAuth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: SCOPES,
+        });
+
+        console.log('다음 URL을 브라우저에서 열어 인증을 진행하세요:', authUrl);
+
+        // 8. 터미널에서 키보드 입력 대기
+        const rl = readline.createInterface({
+            input: process.stdin,
+            ouput: process.stdout,
+        });
+
+        const code = await new Promise((resolve) => {
+            rl.question('인증이 완료되어 발급된 코드를 여기에 붙여넣으세요: ', (code) => {
+                resolve(code);
+            });
+        });
+
+        rl.close();
+
+        // 9. 인증 코드를 이용하여 엑세스 토큰 발급
+        const resp = await oAuth2Client.getToken(code);
+        return resp.tokens;
+    }
+}
+
+module.exports = SheetApiClientFactory;
+```
+
+> 해당 코드는 OAuth 클라이언트를 통해 구글 시트 API 호출을 할 수 있는 권한을 가진 액세스 토큰을 발급하고, 이 토큰을 사용하는 구글 시트 API 클라이언트를 생성한다.
+> 
+- 1. 구글 OAuth 클라이언트 사용하는 데 필요한 클라이언트 ID와 클라이언트 보안 비밀번호가 담긴 `credentials.json` 파일을 읽어들인다.
+    
+    → 이렇게 읽어들인 정보로 4. 구글 OAuth 인증 절차를 진행하기 위한 OAuth 클라이언트를 초기화한다.
+    
+- 5. 이미 발급받은 액세스 토큰이 없다면 새롭게 발급 요청을 한   후, 액세스 토큰을 파일로 저장한다.
+    
+    → 저장해둔 액세스 토큰이 이미 있으면, 매번 OAuth 인증 절차를 거칠 필요 없이 6.에서처럼 저장된 토큰을 재활용해서 구글 시트 API를 계속 호출할 수 있다. 
+    
+- **OAuth 인증 절차**는 인증 코드를 먼저 획득하고 이 인증 코드를 이용하여 액세스 토큰을 발급받는 순서로 진행된다.
+    
+    → 7. 은 이러한 인증 과정을 웹브라우저에서 진행하는 데 필요한 웹페이지의 URL을 생성한다. 
+    
+    ✔︎ 이 URL에 웹브라우저로 접속하여 실제 구글 계정으로 로그인을 하면 이 OAuth 클라이언트에 구글 시트 API를 사용할 권한을 부여할 것인지 물어본다. 
+    
+    ✔︎ 여기서 권한을 부여하면 인증 코드가 생성된다.
+    
+- 8.에서는 터미널에서 입력 프롬포트를 띄우고 사용자가 인증 코드를 입력할 때까지 키보드 입력을 기다린다.
+    
+    ✔︎ 생성된 인증 코드를 사용자가 입력하면 해당 코드를 이용하여 9.에서 액세스 토큰 발급 요청을 진행한다.
+    
+
+<aside>
+💡 실제로 인증 절차를 수행해서 액세스 토큰을 발급받으려면 방금 만든 SheetApiClientFactory 클래스를 실행해주는 진입점이 필요하다.
+
+</aside>
+
+```jsx
+// coronaboard-api/tools/sheet_api_client_factory_tester.js
+const SheetApiClientFactory = require('./sheet_api_client_factory.js');
+
+async function main() {
+    try {
+        await SheetApiClientFactory.create();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+main();
+```
+
+```jsx
+// tools/sheet_downloader.js
+const fs = require('fs');
+const path = require('path');
+
+class SheetDownloader {
+    constructor(apiClient) { // 1
+        this.apiClient = apiClient;
+    }
+
+    /**
+     * 명시한 스프레드시트의 시트 내용을 읽어 JSON 객체로 변환해준다.
+     * @param spreadsheetId 스프레드시트 ID
+     * @param sheetName 시트 이름
+     * @param filePath 저장할 JSON 파일 생략 시 파일로 저장하지 않음
+     */
+    async downloadToJson(spreadsheetId, sheetName, filePath = null) { // 2
+        // 3. 명시한 시트의 내용을 가져온다.
+        const res = await this.apiClient.spreadsheets.values.get({
+            spreadsheetId,
+            range: sheetName,
+        });
+
+        // 행 데이터(배열)을 얻어온다.
+        const rows = res.data.values;
+
+        // 행이 0개라면, 즉 시트에 아무런 데이터가 없다면 빈 JSON 객체를 반환한다.
+        if (rows.length === 0) {
+            const message = 'No data found on the sheet';
+            console.error(message);
+            return {};
+        }
+
+        // 4. 행 데이터(배열)를 객체로 반환한다.
+        const object = this._rowsToObject(rows);
+
+        // 5. filePath를 명시했다면 지정한 파일로 저장
+        if (filePath) {
+            // 마지막 인수는 space 의미.
+            // 이곳에 2를 넣으면 출력되는 JSON 문자열에 2칸 들여쓰기와 줄바꿈이 적용되어 보기 편해진다.
+            const jsonText = JSON.stringify(object, null, 2);
+
+            const directory = path.dirname(filePath);
+            if (!fs.existsSync(directory)) {
+                fs.mkdirSync(directory);
+            }
+            fs.writeFileSync(filePath, jsonText);
+            console.log(`Written to ${filePath}`);
+        }
+        return object;
+    }
+
+    _rowsToObject(rows) {
+        ...생략...
+    }
+}
+
+module.exports = SheetDownloader;
+```
+
+1. 생성자에 apiClient 객체를 받고 있다. 여기에는 앞 절에서 작성한 코드의 SheetApiClientFactory.create()를 호출하여 구글 시트 API 클라이언트 객체를 넣어주면 된다.
+2. downloadToJson() 함수를 살펴보면 앞에서 설명했던대로
+3. 스프레드시트 아이디와 시트명을 입력받아 해당 시트를 읽어들인 후,
+4. 내부 함수인 _rowsToObject()를 호출하여 2차원 배열을 키값 형태의 객체로 변환한다. 
+5. 변환된 객체는 filePath가 지정된 경우 JSON 형태로 직렬화해서 파일로 저장한다. 
+    
+    → 이렇게 파일로 저장해두면, 나중에 읽어들여 사용할 수 있다.
+    
+
+### _rowsToObject()
+
+```jsx
+/**
+     * 주어진 배열을 JSON 객체로 변환해준다.
+     * @params rows 변환할 2차원 배열
+     */
+    _rowsToObject(rows) {
+        const headerRow = rows.slice(0, 1)[0]; // 1
+        const dataRows = rows.slice(1, rows.length); // 2
+
+        return dataRows.map(row => {
+            const item = {};
+            for (let i = 0; i < headerRow.length; i++) { // 열(제목) 수만큼 반복
+                const fieldName = headerRow[i]; // 키 (열 제목)
+                const fieldValue = row[i]; // 값 (내용)
+                item[fieldName] = fieldValue;
+            }
+            return item;
+        });
+    }
+```
+
+### 실제 데이터 적용
+
+> 위에 작성한 `SheetApiClientFactory` 클래스와 `SheetDownloader` 클래스를 이용하여 앞서 계속 사용하던 **‘코로나보드 데이터 예제’** 스프레드시트로부터 공지사항 데이터가 들어있는 `notice` 시트와 전 세계 국가 정보가 들어 있는 `countryInfo` 시트에서 데이터를 내려받아 json 파일로 저장하고, 생성된 객체를 콘솔로 출력하는 코드 작성하기.
+> 
+
+```jsx
+// tools/main.js
+const SheetApiClientFactory = require('./sheet_api_client_factory.js');
+const SheetDownloader = require('./sheet_downloader.js');
+
+async function main() {
+    try {
+        const sheetApiClient = await SheetApiClientFactory.create();
+        const downloader = new SheetDownloader(sheetApiClient);
+
+        // '코로나보드 데이터 예제' 스프레드시트의 실제 ID 값
+        const spreadsheetId = '1z2d4gBO8JSI8SEotnHDKdcq8EQ9X4O5fWPxeUCAqW1c';
+
+        // 공지 내려받기
+        const notice = await downloader.downloadToJson(
+            spreadsheetId,
+            'notice',
+            'downloaded/notice.json',
+        );
+
+        console.log(notice);
+
+        // 국가 정보 내려받기
+        const countryInfo = await downloader.downloadToJson(
+            spreadsheetId,
+            'countryInfo',
+            'downloaded/countryInfo.json',
+        );
+
+        console.log(countryInfo);
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+main();
+```
+
+![node main.js 실행 후](https://s3-us-west-2.amazonaws.com/secure.notion-static.com/724ab902-aaad-4890-8f24-b343a312e2f9/Untitled.png)
+
+node main.js 실행 후
